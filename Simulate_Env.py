@@ -28,124 +28,6 @@ class Simulate_Env(gym.Env, EzPickle):
         self.candidate = []
         #self.expert_affinity = getExpertAffinity # 专家亲和力矩阵 待完成！！
 
-    def done(self):
-        return np.all(self.mask_gpu)
-
-    @override
-    def step(self, action, mch_a, gantt_plt=None):
-        # 执行动作，维护和更新环境状态，计算奖励
-        # 删除done相关的
-        # action is a int 0 - 224 for 15x15 for example
-        time1 = time.time()
-        feas, rewards, dones,masks,mch_masks = [],[], [], [],[]
-        mch_spaces, mchForJobSpaces = [],[]
-        for i in range(self.batch_size):
-            # redundant action makes no effect 多余的动作无效
-            if action[i] not in self.history_expert_gpu[i]: # 记录已经被调度的任务序列
-
-                # UPDATE BASIC INFO:
-                row = action[i] // self.number_of_gpus#取整除
-                col = action[i] % self.number_of_gpus#取余数
-                if i == 0:
-                    self.step_count += 1
-                self.history_popularity[i,row, col] = 1
-
-                self.dur_a = self.expert_token[i,row, col,mch_a[i]]
-                #action time
-                self.history_expert_gpu[i][np.where(self.history_expert_gpu[i]<0)[0][0]] = action[i]
-
-                self.m[i][row][col]=mch_a[i]
-                # UPDATE STATE:
-                # permissible left shift 允许向左移动
-
-                startTime_a, flag = permissibleLeftShift(a=action[i], mch_a=mch_a[i], durMat=self.comp_time[i], mchMat=self.m[i],
-                                                         mchsStartTimes=self.mchsStartTimes[i], opIDsOnMchs=self.opIDsOnMchs[i],mchEndTime=self.mchsEndTimes[i])
-                self.flags.append(flag)
-                if gantt_plt != None:
-                    gantt_plt.gantt_plt(row, col, mch_a.cpu().numpy(), startTime_a, self.dur_a,
-                                    self.number_of_experts)
-                # update candidate or mask_expert
-                if action[i] not in self.last_col[i]:
-                    self.candidate[i,action[i] // self.number_of_gpus] += 1
-                else:
-                    self.mask_expert[i,action[i] // self.number_of_gpus] = 1
-
-                self.temp1[i,row, col] = startTime_a + self.dur_a#完工时间
-
-                #temp1.shape()
-                self.LBs[i] = calEndTimeLB(self.temp1[i], self.input_min[i],self.input_mean[i])
-
-                self.current_token[i] = calEndTimeLBm(self.temp1[i],self.input_min[i])
-
-
-                #self.LBs为所有task最快的完工时间
-                # expert_links matrix
-                precd, succd = self.getNghbs(action[i], self.opIDsOnMchs[i])
-
-                self.expert_links[i, action[i]] = 0
-                self.expert_links[i, action[i], action[i]] = 1
-                if action[i] not in self.first_col[i]:
-                    self.expert_links[i, action[i], action[i] - 1] = 1
-                self.expert_links[i, action[i], precd] = 1
-                self.expert_links[i, succd, action[i]] = 1
-
-                '''if action[i] not in self.first_col[i]:
-                    self.expert_links[i,action[i]-1, action[i]] = 0
-                self.expert_links[i, precd,action[i]] = 0
-                self.expert_links[i, action[i],succd] = 0'''
-                done = self.done()
-                #min_job_mch(gpu_token, mchsEndTimes, number_of_gpus, expert_token, temp, first_col)
-                mch_space,mchForJobSpace,mask1,mch_mask = min_job_mch(self.gpu_token[i],self.run_time[i],self.mchsEndTimes[i],self.number_of_gpus,self.comp_time[i],self.temp1[i],self.candidate[i],self.mask_expert[i],done,self.mask_gpu[i])
-
-                mch_spaces.append(mch_space)
-                mchForJobSpaces.append(mchForJobSpace)
-                masks.append(mask1)
-                mch_masks.append(mch_mask)
-                #print('action_space',mchForJobSpaces,'mchspace',mch_space)
-
-            # prepare for return
-            #-------------------------------------------------------------------------------------
-            '''expert_nodes = np.concatenate((self.LBs[i].reshape(-1, 2)/configs.et_normalize_coef,
-                                  self.history_popularity[i].reshape(-1, 1)), axis=-1)'''
-            #----------------------------------------------------------------------------------------
-
-            '''expert_nodes = np.concatenate((self.expert_token[i].reshape( -1, self.number_of_gpus)/configs.et_normalize_coef,
-                                  self.history_popularity[i].reshape( -1, 1)), axis=-1)'''
-#--------------------------------------------------------------------------------------------------------------------
-
-            '''expert_nodes = self.current_token[i].reshape(-1, 1) / configs.et_normalize_coef'''
-            expert_nodes = np.concatenate((self.current_token[i].reshape(-1, 1) / configs.et_normalize_coef,
-                                  #np.expand_dims(self.run_time[i], 1).repeat(self.number_of_gpus, axis=1).reshape(
-                                      #self.n_moe_layer, 1)/configs.et_normalize_coef,
-                                  self.history_popularity[i].reshape( -1, 1)), axis=-1)
-
-            feas.append(expert_nodes)
-
-
-            '''reward = self.mchsEndTimes[i][mch_a[i]].max()-self.up_mchendtime[i][mch_a[i]].max()-self.dur_a
-
-
-            if reward < 0.00001:
-                reward = 0
-            self.up_mchendtime = np.copy(self.mchsEndTimes)
-            for b,c in zip(self.up_mchendtime[i],range(self.number_of_gpus)):
-                self.up_mchendtime[i][c] = [0 if i < 0 else i for i in b]
-            rewards.append(reward)'''
-            reward = -(self.current_token[i].max() - self.max_endTime[i]) # 时间缩短，则奖励为正
-            if reward == 0:
-                reward = configs.rewardscale
-                self.posRewards[i] += reward
-            rewards.append(reward)
-            self.max_endTime[i] = self.current_token[i].max()
-
-            dones.append(done)
-
-
-        t2 = time.time()
-        mch_masks = np.array(mch_masks)
-
-        #print('t2',t2-t1)
-        return self.expert_links, np.array(feas), rewards, dones, self.candidate, masks,mchForJobSpaces,self.mask_gpu,self.gpu_token,self.run_time
 
     @override
     def reset(self, data):
@@ -157,11 +39,9 @@ class Simulate_Env(gym.Env, EzPickle):
 
         self.step_count = 0
         # 跟踪各专家对GPU资源的分配状态，-1 代表未分配
-        self.m = -1 * np.ones((self.batch_size,self.number_of_experts,self.number_of_gpus), dtype=np.int32)
+        self.history_expert_gpu = np.zeros((self.batch_size, self.number_of_experts, self.number_of_gpus), dtype=bool)
 
-        self.expert_token = data.astype(np.single)#single单精度浮点数
-        # record action history，跟踪每个专家在每个 GPU 上的历史分配情况
-        self.history_expert_gpu = -1 * np.ones((self.batch_size,self.number_of_experts*self.number_of_gpus),dtype=np.int32)
+        self.expert_token = data.astype(np.single)#single单精度浮点数、
 
         self.posRewards = np.zeros(self.batch_size)
         self.expert_links = []
@@ -189,28 +69,32 @@ class Simulate_Env(gym.Env, EzPickle):
         self.expert_links = torch.tensor(expert_links_array, dtype=torch.float32)
 
         vanilla_p = vanilla_placement(self.n_moe_layer, self.number_of_experts / self.n_moe_layer, self.number_of_gpus)
-        # initialize gpu_links matrix : bandwidth , token traffic
-        self.gpu_links = []
+        for gpu_id, experts_in_gpu in enumerate(vanilla_p):
+            for expert_id in experts_in_gpu:
+                self.history_expert_gpu[:, expert_id, gpu_id] = True
+        # print("Initialize history_expert_gpu Success!\n", "history_expert_gpu[batch 0][expert 0]: ", self.history_expert_gpu[0][0], "\n")
+
+        # initialize self.gpu_links matrix : bandwidth , token traffic
+        self.gpu_links = np.zeros((self.batch_size, self.number_of_gpus, self.number_of_gpus, 2))
         for k in range(self.batch_size):
-            gpu_links_matrix = np.zeros((self.number_of_gpus, self.number_of_gpus), dtype=[('bandwidth', 'f4'), ('traffic', 'f4')])
-            # 初始化带宽为随机值
+            # Initialize bandwidth with random values
             for i in range(self.number_of_gpus):
                 for j in range(i + 1, self.number_of_gpus):
-                    bandwidth = np.random.uniform(1.0, 1.5)
-                    gpu_links_matrix[i, j]['bandwidth'] = gpu_links_matrix[j, i]['bandwidth'] = bandwidth
-            # 初始化数据传输量
+                    bandwidth = np.random.rand() * 1000  # 带宽范围在 0 到 1000 之间
+                    self.gpu_links[k, i, j, 0] = bandwidth
+                    self.gpu_links[k, j, i, 0] = bandwidth
+            # Initialize data transfer traffic
             for i in range(self.number_of_gpus):
                 for j in range(self.number_of_gpus):
                     if i != j:
                         traffic = 0
-                        # 计算从GPU i到GPU j的专家间的token传输量
+                        # Calculate token traffic from GPU i to GPU j
                         for expert_i in vanilla_p[i]:
                             for expert_j in vanilla_p[j]:
                                 traffic += data[k, int(expert_i), int(expert_j)]
-                        gpu_links_matrix[i, j]['traffic'] = traffic
-            self.gpu_links.append(gpu_links_matrix)
-        print("Initialize Expert_links(affinity) Success!\n", "bandwidth: ", self.gpu_links[0][0,1]['bandwidth'], ", traffic: ", self.gpu_links[0][0,1]['traffic'], "\n")
-
+                        self.gpu_links[k, i, j, 1] = traffic
+        print("Initialize GPU_links Success!\n", "bandwidth[batch 0][gpu 0][gpu 1]: ", self.gpu_links[0][0][1][0], ", token traffic[batch 0][gpu 0][gpu 1]: ", self.gpu_links[0][0][1][1], "\n")
+        
         # 初始化专家的token数据量
         self.current_token = np.zeros((self.batch_size, self.number_of_experts))
         # 计算每个专家在每个批次中处理的总token数量
@@ -222,13 +106,13 @@ class Simulate_Env(gym.Env, EzPickle):
         # 随机初始化专家的历史流行度
         self.history_popularity = np.random.rand(self.batch_size, self.number_of_experts).astype(float)
 
-        # 初始化 expert_nodes: historical popularity、current token load
+        # 初始化 self.expert_nodes: historical popularity、current token load
         self.expert_nodes = np.concatenate(
             [   self.current_token.reshape(self.batch_size, self.number_of_experts, 1),
                 self.history_popularity.reshape(self.batch_size, self.number_of_experts, 1)],
             axis=2  # 沿最后一个维度拼接
         )
-        print("Initialize expert_nodes Success!\n", "current_token: ", self.expert_nodes[0][0][0], ", history_popularity: ", self.expert_nodes[0][0][1], "\n")
+        print("Initialize self.expert_nodes Success!\n", "current_token: ", self.expert_nodes[0][0][0], ", history_popularity: ", self.expert_nodes[0][0][1], "\n")
 
         # 随机初始化 GPU nodes: compute speed、utilization、available memory
         compute_speed = np.random.uniform(low=0.5, high=2.0, size=(self.batch_size, self.number_of_gpus))
@@ -242,18 +126,116 @@ class Simulate_Env(gym.Env, EzPickle):
             utilization.reshape(self.batch_size, self.number_of_gpus, 1), 
             available_memory.reshape(self.batch_size, self.number_of_gpus, 1)], 
             axis=-1)
-        print("Initialize gpu_nodes Success!\n", "compute_speed: ", self.gpu_nodes[0][0][0], ", utilization: ", self.gpu_nodes[0][0][1], ", available_memory: ", self.gpu_nodes[0][0][2], "\n")
+        print("Initialize self.gpu_nodes Success!\n", "compute_speed: ", self.gpu_nodes[0][0][0], ", utilization: ", self.gpu_nodes[0][0][1], ", available_memory: ", self.gpu_nodes[0][0][2], "\n")
 
-        # initialize mask_expert, mask out current traffic < 200
+        # initialize self.mask_expert, mask out current traffic < 200
         self.mask_expert = self.current_token < 200
-        # initialize mask_gpu, mask out utilization > 0.9
+        # initialize self.mask_gpu, mask out utilization > 0.9
         self.mask_gpu = utilization > 0.9
-        print("Initialize Mask_Expert: ", self.mask_expert[0], "\n")
-        print("Initialize Mask_GPU ", self.mask_gpu[0], "\n")
 
         self.initQuality = np.ones(self.batch_size)
 
-        return self.expert_links, self.expert_nodes, self.gpu_links, self.gpu_nodes, self.mask_expert, self.mask_gpu, #self.candidate
+        return self.expert_links, self.expert_nodes, self.gpu_links, self.gpu_nodes, self.mask_expert, self.mask_gpu
+
+
+    def done(self):
+        return np.all(self.mask_gpu)
+
+
+    @override
+    def step(self, expert_indices, gpu_bool_array, gantt_plt=None):
+        # 执行动作，维护和更新环境状态，计算奖励
+        t1 = time.time()
+        expert_links, expert_nodes, gpu_nodes, gpu_links, mask_expert, mask_gpu, rewards, gpu_done = [],[],[],[],[],[],[],[]
+        gpu_available = []
+        for i in range(self.batch_size):
+            expert_selected = expert_indices[i]
+            gpu_selected = gpu_bool_array[i]
+            done = False
+            # redundant expert_gpu action makes no effect
+            for j in range(self.number_of_gpus):
+                if self.history_expert_gpu[i][expert_selected][j] == gpu_selected[j]:
+                    break
+                # UPDATE BASIC INFO
+                if i == 0:
+                    self.step_count += 1
+                
+                previous_placement = self.history_expert_gpu[i, expert_selected, j] # 用于后续 update
+                self.history_expert_gpu[i,expert_selected, j] = gpu_selected[j]
+
+                # update gpu_nodes  
+                # historical gpu_nodes features: compute speed(stable), utilization, available memory
+                old_utilization = deepcopy(self.gpu_nodes[i, j, 1])
+                old_available_memory = deepcopy(self.gpu_nodes[i, j, 2])
+                old_traffic = deepcopy(self.gpu_links[i, :, j, 1] + self.gpu_links[i, j, :, 1])
+                token_load = self.current_token[i, expert_selected]
+
+                if previous_placement == 1:
+                    old_utilization -= token_load / self.current_token[i].sum() # 这里需要改为实际利用率
+                    old_available_memory += token_load
+                if gpu_selected[j] == 1:
+                    old_utilization += token_load / self.current_token[i].sum()
+                    old_available_memory -= token_load
+                
+                if (old_utilization > 0.9) or (old_available_memory < 0):
+                    break
+                self.gpu_nodes[i, j, 1] = np.clip(old_utilization, 0, 1)  # 更新utilization并确保不超过100%
+                self.gpu_nodes[i, j, 2] = np.clip(old_available_memory, 0, None)  # 更新available_memory并确保不为负
+
+                # update gpu_links: bandwidth(stable), token traffic
+                new_traffic = 0
+                for k in range(self.number_of_gpus):
+                    if k != j:
+                        new_traffic = 0
+                        for expert_i in range(self.number_of_experts):
+                            if self.history_expert_gpu[i, expert_i, j] == 1:
+                                for expert_j in range(self.number_of_experts):
+                                    if self.history_expert_gpu[i, expert_j, k] == 1:
+                                        new_traffic += self.current_token[i, expert_i]
+                        self.gpu_links[i, j, k, 1] = new_traffic
+                        self.gpu_links[i, k, j, 1] = new_traffic
+
+                # update expert_nodes
+                decay_factor = 0.95  # 流行度衰减因子，需要改为实际情况
+                popularity_increase = 0.05  # 流行度增加基数，需要改为实际情况
+                for k in range(self.batch_size):
+                    for i in range(self.number_of_experts):
+                        self.history_popularity[k, i] = decay_factor * self.history_popularity[k, i] + popularity_increase * self.current_token[k, i]
+                self.expert_nodes = np.concatenate([self.current_token.reshape(self.batch_size, self.number_of_experts, 1),
+                                                    self.history_popularity.reshape(self.batch_size, self.number_of_experts, 1)],
+                                                    axis=2)
+
+                # update expert_links 更新亲和力矩阵，待实现！！
+
+                # update mask_expert
+
+                # update mask_gpu
+
+                # update rewards
+                
+
+                done = self.done()
+                
+
+            self.expert_nodes = np.concatenate((self.current_token[i].reshape(-1, 1) / configs.et_normalize_coef,
+                                                self.history_popularity[i].reshape( -1, 1)), axis=-1)
+            self.expert_nodes.append(self.expert_nodes)
+
+            reward = -(self.current_token[i].max() - self.max_endTime[i]) # 时间缩短，则奖励为正
+            if reward == 0:
+                reward = configs.rewardscale
+                self.posRewards[i] += reward
+            rewards.append(reward)
+            
+            gpu_done.append(done)
+
+
+        t2 = time.time()
+        mask_gpu = np.array(mask_gpu)
+
+        print('t2', t2-t1)
+        return self.expert_nodes, self.expert_links, self.gpu_nodes, self.gpu_links, self.mask_expert, self.mask_gpu, self.run_time, gpu_done, rewards
+
 
 
 class GANTT():

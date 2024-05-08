@@ -90,12 +90,6 @@ class PPO:
                                     gpu_feature_dim = 3, 
                                     num_gpus = configs.n_g,
                                     device = device)
-        # self.policy_gpu = GPU_Actor(input_dim_expert=2,
-        #                             input_dim_gpu=3,
-        #                             n_g=configs.n_g,
-        #                             n_e=configs.n_e,
-        #                             hidden_size=configs.hidden_dim,
-        #                             device=device).to(device)
 
         self.policy_old_expert = deepcopy(self.policy_expert)
         self.policy_old_gpu = deepcopy(self.policy_gpu)
@@ -320,8 +314,8 @@ def main(epochs):
             expert_log_prob = []
             gpu_log_prob = []
             reward = []
+            env_done = [] # 若所有GPU负载已满，则结束动态调度?
 
-            j = 0
             gpu_select = []
             pool = None
             ep_rewards = - env.initQuality
@@ -331,6 +325,12 @@ def main(epochs):
                 env_expert_nodes = torch.from_numpy(np.copy(expert_nodes)).float().to(device)
                 print("deepcopy(env_expert_links) \n", env_expert_links.shape)
                 print("deepcopy(env_expert_nodes) \n", env_expert_nodes.shape)
+
+                env_gpu_links = deepcopy(env.gpu_links)
+                env_gpu_links = torch.from_numpy(env_gpu_links).to(device)
+                env_gpu_nodes = torch.from_numpy(np.copy(gpu_nodes)).float().to(device)
+                print("deepcopy(env_gpu_links) \n", env_gpu_links.shape)
+                print("deepcopy(env_gpu_nodes) \n", env_gpu_nodes.shape, "\n")
 
                 env_mask_expert = torch.from_numpy(np.copy(mask_expert)).to(device)
                 env_mask_gpu = torch.from_numpy(np.copy(mask_gpu)).to(device)
@@ -354,7 +354,7 @@ def main(epochs):
                                                 gpu_nodes = gpu_nodes, 
                                                 gpu_links = gpu_links, 
                                                 mask_gpu_action = env_mask_gpu)
-                print("Expert Selection[batch 0] = ", expert_indices[0], "\nGPU Bool Array[batch 0] = ", gpu_bool_array[0])
+                print("Expert Selection[batch 0] = ", expert_indices[0], "\nGPU Bool Array[batch 0] = ", gpu_bool_array[0], "\n")
 
                 # 记录过程数据
                 memory.expert_selection.append(expert_indices)
@@ -367,24 +367,28 @@ def main(epochs):
                 memory.gpu_link_fea.append(gpu_links)
                 
                 # 向环境提交选择的动作和机器，接收新的状态、奖励和完成标志等信息
-                expert_links, expert_nodes, gpu_nodes, gpu_links, reward, dur_time = env.step(expert_indices.cpu().numpy(),
+                expert_nodes, expert_links, gpu_nodes, gpu_links, mask_expert, mask_gpu, gpu_done, reward = env.step(expert_indices.cpu().numpy(),
                                                                                                gpu_bool_array)
                 ep_rewards += reward
                 reward.append(deepcopy(reward))
 
-                j += 1
+                env_done.append(deepcopy(gpu_done))
+
                 if env.done(): # mask_gpu 没有可用的GPU时，结束
                     break
+            
             memory.expert_token.append(env_expert_token)
             memory.mask_gpu.append(env_mask_gpu)
 
             memory.expert_logprobs.append(expert_log_prob)
             memory.gpu_logprobs.append(gpu_log_prob)
             memory.reward.append(torch.tensor(reward).float().permute(1, 0))
-            # -------------------------------------------------------------------------------------
+
+            # rewards
             ep_rewards -= env.posRewards
-            # -------------------------------------------------------------------------------------
+            # ppo.update
             loss, v_loss = ppo.update(memory,batch_idx)
+
             memory.clear_memory()
             mean_reward = np.mean(ep_rewards)
             log.append([batch_idx, mean_reward])

@@ -8,7 +8,7 @@ def vanilla_placement(n_layers, experts_per_layer, number_of_gpus):
         # 随机打乱并均匀分布
         np.random.shuffle(experts)
         # 将专家均匀分配到每个GPU
-        return np.array_split(experts, number_of_gpus)
+        return [np.array_split(experts, number_of_gpus)[i].astype(int) for i in range(number_of_gpus)]
 
 def select_gpus(p, prob_high, prob_low):
     gpu_selection = torch.full_like(p, -1, dtype=torch.int)  # -1 表示不确定
