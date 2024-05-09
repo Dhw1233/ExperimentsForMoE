@@ -368,7 +368,8 @@ def main(epochs):
                 
                 # 向环境提交选择的动作和机器，接收新的状态、奖励和完成标志等信息
                 expert_nodes, expert_links, gpu_nodes, gpu_links, mask_expert, mask_gpu, gpu_done, reward = env.step(expert_indices.cpu().numpy(),
-                                                                                               gpu_bool_array)
+                                                                                               gpu_bool_array,
+                                                                                               data)
                 ep_rewards += reward
                 reward.append(deepcopy(reward))
 
