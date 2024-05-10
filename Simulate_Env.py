@@ -2,17 +2,13 @@ import gym
 import numpy as np
 from gym.utils import EzPickle
 from uniform_instance import override
-from updateEndTimeLB import calEndTimeLB,calEndTimeLBm
 from Params import configs
-from permissibleLS import permissibleLeftShift
-from updateAdjMat import getExpertAffinity
 from agent_utils import vanilla_placement
 from copy import deepcopy
 import torch
 import random
 import matplotlib.pyplot as plt
 import time
-from min_job_machine_time import min_job_mch,min_mch_job,min_job_mch1
 class Simulate_Env(gym.Env, EzPickle):
     def __init__(self,
                  n_moe_layer,
@@ -159,6 +155,9 @@ class Simulate_Env(gym.Env, EzPickle):
                     self.mask_expert[i, expert] = False
             # 检查 expert_selected 是否被屏蔽，如果是则跳过本次循环
             if self.mask_expert[i, expert_selected]:
+                rewards.append(0)
+                done = self.done()
+                gpu_done.append(done)
                 continue
             
             previous_traffic = np.sum(self.gpu_links[i, :, :, 1])
@@ -208,7 +207,6 @@ class Simulate_Env(gym.Env, EzPickle):
                 
                 # update mask_gpu
                 self.mask_gpu[i, j] = self.gpu_nodes[i, j, 1] > 0.9
-                
                 done = self.done()
                 
             # update expert_nodes : current token load(already updated), history popularity
@@ -232,7 +230,6 @@ class Simulate_Env(gym.Env, EzPickle):
             if current_traffic < previous_traffic:
                 reward = previous_traffic - current_traffic
             rewards.append(reward)
-
             gpu_done.append(done)
 
         self.expert_nodes = np.concatenate([

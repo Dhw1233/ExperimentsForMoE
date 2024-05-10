@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.graphCNN import GraphCNN, MLPActor, MLP, MLPCritic
 from torch.distributions.categorical import Categorical
 import torch
 from Params import configs
@@ -59,6 +58,40 @@ class ExpertEncoder(nn.Module):
         return self.gnn(expert_nodes, expert_links)
 
 
+class MLPActor(nn.Module):
+    def __init__(self, num_layers, input_dim, hidden_dim, output_dim):
+        super(MLPActor, self).__init__()
+        layers = []
+        for i in range(num_layers):
+            if i == 0:
+                layers.append(nn.Linear(input_dim, hidden_dim))
+            else:
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_dim, output_dim))
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+
+
+class MLPCritic(nn.Module):
+    def __init__(self, num_layers, input_dim, hidden_dim, output_dim):
+        super(MLPCritic, self).__init__()
+        layers = []
+        for i in range(num_layers):
+            if i == 0:
+                layers.append(nn.Linear(input_dim, hidden_dim))
+            else:
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_dim, output_dim))
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+
+
 class Expert_Actor(nn.Module):
     def __init__(self,
                  n_moe_layer,
@@ -86,7 +119,7 @@ class Expert_Actor(nn.Module):
         self._input = nn.Parameter(torch.Tensor(hidden_dim))
         self._input.data.uniform_(-1, 1).to(device)
         self.actor1 = MLPActor(3, hidden_dim * 3, hidden_dim, 1).to(device)
-        self.critic = MLPCritic(num_mlp_layers_critic, hidden_dim, hidden_dim_critic, 1).to(device)
+        # self.critic = MLPCritic(num_mlp_layers_critic, hidden_dim, hidden_dim_critic, 1).to(device)
         if INIT:
             for name, p in self.named_parameters():
                 if 'weight' in name:
@@ -115,49 +148,16 @@ class Expert_Actor(nn.Module):
                 probs = h_nodes[:, :, -1]
                 masked_probs = probs.clone()
                 masked_probs[mask_expert] = float('-inf')
+                masked_probs = F.softmax(masked_probs, dim=1)
                 _, indices = torch.max(masked_probs, dim=1)
             else:
                 print("Greedy Select Expert Needed!\n")
 
             print("Selected expert indices: batch 0 = ", indices[0], ", batch N = ", indices[1])
+            h_pooled = torch.mean(h_nodes, dim=1)
+            print("Pooled expert nodes shape:", h_pooled.shape)
 
-            return indices
-
-        else:
-            expert_candidate_idx = expert_candidate.unsqueeze(-1).expand(-1, self.n_e, h_nodes.size(-1))
-            batch_node = h_nodes.reshape(expert_candidate_idx.size(0), -1, expert_candidate_idx.size(-1)).to(self.device)
-            candidate_feature = torch.gather(h_nodes.reshape(expert_candidate_idx.size(0), -1, expert_candidate_idx.size(-1)), 1, expert_candidate_idx)
-
-            h_pooled_repeated = h_pooled.unsqueeze(-2).expand_as(candidate_feature)
-            if gpu_pool == None:
-                gpu_pooled_repeated = self._input[None, None, :].expand_as(candidate_feature).to(self.device)
-            else:
-                gpu_pooled_repeated = gpu_pool.unsqueeze(-2).expand_as(candidate_feature).to(self.device)
-            concateFea = torch.cat((candidate_feature, h_pooled_repeated, gpu_pooled_repeated), dim=-1)
-            candidate_scores = self.actor1(concateFea)
-
-            candidate_scores = candidate_scores.squeeze(-1) * 10
-            mask_reshape = mask_expert.reshape(candidate_scores.size())
-            candidate_scores[mask_reshape] = float('-inf')
-
-            pi = F.softmax(candidate_scores, dim=1)
-            dist = Categorical(pi)
-
-            log_e = dist.log_prob(e_index.to(self.device))
-            entropy = dist.entropy()
-
-            action1 = old_expert.type(torch.long).cuda()
-            mask_gpu = mask_gpu.reshape(expert_candidate_idx.size(0), -1, self.n_g)
-            mask_gpu_action = torch.gather(mask_gpu, 1,
-                                           action1.unsqueeze(-1).unsqueeze(-1).expand(mask_gpu.size(0), -1,
-                                                                                      mask_gpu.size(2)))
-            # --------------------------------------------------------------------------------------------------------------------
-            expert_node = torch.gather(batch_node, 1,
-                                          action1.unsqueeze(-1).unsqueeze(-1).expand(batch_node.size(0), -1,
-                                                                                     batch_node.size(2))).squeeze(1)
-            v = self.critic(h_pooled)
-
-            return entropy, v, log_e, expert_node.detach(), mask_gpu_action.detach(), h_pooled.detach()
+            return indices, masked_probs, h_pooled
 
 
 class GPU_Actor(nn.Module):
@@ -196,13 +196,16 @@ class GPU_Actor(nn.Module):
 
         # Decoding to make placement decisions
         decision_logits = self.decoder(combined_features)
+        decision_probs_ = F.softmax(decision_logits, dim=1)
+        decision_probs_[mask_gpu_action] = 0.0
+
         decision_probs = torch.sigmoid(decision_logits)
         decision_bool = decision_probs > 0.5
 
         # Apply mask
         decision_bool[mask_gpu_action] = False
 
-        return decision_bool
+        return decision_bool, decision_probs_
 
 
 
