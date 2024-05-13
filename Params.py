@@ -34,9 +34,9 @@ parser.add_argument('--hidden_dim_critic', type=int, default=32, help='hidden di
 
 parser.add_argument('--ppo_step', type=int, default=3, help='No. of envs for training')
 parser.add_argument('--batch_size', type=int, default=64, help='No. of envs for training')
-parser.add_argument('--num_ins', type=int, default=64000, help='No. of envs for training')
+parser.add_argument('--num_ins', type=int, default=6400, help='No. of envs for training')
 
-parser.add_argument('--max_updates', type=int, default=10000, help='No. of episodes of each env for training')
+parser.add_argument('--max_updates', type=int, default=1000, help='No. of episodes of each env for training')
 parser.add_argument('--lr', type=float, default=1e-3, help='lr')
 parser.add_argument('--decayflag', type=bool, default=False, help='lr decayflag')
 parser.add_argument('--decay_step_size', type=int, default=500, help='decay_step_size')

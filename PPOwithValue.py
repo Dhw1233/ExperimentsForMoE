@@ -1,4 +1,3 @@
-from mb_agg import *
 from agent_utils import eval_actions
 from agent_utils import select_gpus
 from models.PPO_Actor1 import Expert_Actor, GPU_Actor, MLPCritic
@@ -103,36 +102,34 @@ class PPO:
         self.policy_old_expert.load_state_dict(self.policy_expert.state_dict())
         self.policy_old_gpu.load_state_dict(self.policy_gpu.state_dict())
 
-        self.optimizer = torch.optim.Adam([
-            {'params': self.policy_expert.parameters(), 'lr': lr},
-            {'params': self.policy_gpu.parameters(), 'lr': lr},
-            {'params': self.policy_critic.parameters(), 'lr': lr}
-        ])
+        self.expert_optimizer = torch.optim.Adam(self.policy_expert.parameters(), lr=lr)
+        self.gpu_optimizer = torch.optim.Adam(self.policy_gpu.parameters(), lr=lr)
+        self.value_optimizer = torch.optim.Adam(self.policy_critic.parameters(), lr=lr)
 
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=configs.decay_step_size, gamma=configs.decay_ratio)
+        self.expert_scheduler = torch.optim.lr_scheduler.StepLR(self.expert_optimizer, step_size=configs.decay_step_size, gamma=configs.decay_ratio)
+        self.gpu_scheduler = torch.optim.lr_scheduler.StepLR(self.gpu_optimizer, step_size=configs.decay_step_size, gamma=configs.decay_ratio)
+        self.value_scheduler = torch.optim.lr_scheduler.StepLR(self.value_optimizer, step_size=configs.decay_step_size, gamma=configs.decay_ratio)
 
         self.MSE = nn.MSELoss()
 
 
     def update(self, memories, epoch):
         '''self.policy_expert.train()
-        self.policy_gpu.train()'''
+        self.policy_gpu.train()
+        self.policy_critic.train()'''
+
         vloss_coef = configs.vloss_coef
         ploss_coef = configs.ploss_coef
         entloss_coef = configs.entloss_coef
         rewards_all_env = []
 
-        # print("memories.env_done : ", memories.env_done)
-
         # 计算折扣奖励并进行标准化
-        for i in range(configs.batch_size):
-            rewards_list = memories.env_rewards[0][i]  # 获取第 i 个 batch 中的奖励
-            dones_list = memories.env_done[0][i]  # 获取第 i 个 batch 中的终止标志
-
+        for rewards_list, dones_list in zip(memories.env_rewards, memories.env_done):
             rewards = []
             discounted_reward = 0
 
-            assert len(rewards_list) == len(dones_list), "rewards_list 和 dones_list 的长度不一致"
+            rewards_list = rewards_list.squeeze() # 转换为一维张量
+            dones_list = dones_list.squeeze()
 
             for reward, is_terminal in zip(reversed(rewards_list), reversed(dones_list)):
                 if is_terminal:
@@ -144,7 +141,7 @@ class PPO:
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
             rewards_all_env.append(rewards)
 
-        rewards_all_env = torch.stack(rewards_all_env, 0)
+        rewards_all_env = torch.stack(rewards_all_env, 0).squeeze()
         
         for _ in range(configs.k_epochs):
             loss_sum = 0
@@ -184,7 +181,7 @@ class PPO:
                                                         padded_nei = None,
                                                         mask_expert = env_mask_expert)
                 selected_expert_features = env_expert_nodes[:, expert_indices[0], :] # torch.Size([64, 2])
-                selected_expert_links = env_expert_links[:, expert_indices[0], :] # torch.Size([64, 32])\
+                selected_expert_links = env_expert_links[:, expert_indices[0], :] # torch.Size([64, 32])
 
                 gpu_bool_array, gpu_prob = self.policy_gpu(
                                                 expert_node = selected_expert_features, 
@@ -192,7 +189,7 @@ class PPO:
                                                 gpu_nodes = env_gpu_nodes, 
                                                 gpu_links = env_gpu_links, 
                                                 mask_gpu_action = env_mask_gpu)
-                print("expert_prob[batch 0] = ", expert_prob[0], "\ngpu_prob[batch 0] = ", gpu_prob[0], "\n")
+                print("\nexpert_prob[batch 0] = ", expert_prob[0], "\ngpu_prob[batch 0] = ", gpu_prob[0], "\n")
                 # Combine (action_e, action_g)
                 critic_input = torch.cat([h_pooled, gpu_bool_array.float()], dim=1)
                 v = self.policy_critic(critic_input)
@@ -210,60 +207,80 @@ class PPO:
                 gpu_entropy.append(gpu_dist.entropy())
 
             # Convert lists to tensors
-            expert_log_prob, expert_log_old_prob = torch.stack(expert_log_prob), torch.stack(expert_log_old_prob) # torch.Size([64, 32])
-            gpu_log_prob, gpu_log_old_prob = torch.stack(gpu_log_prob), torch.stack(gpu_log_old_prob) # torch.Size([64, 4])
+            expert_log_prob, expert_log_old_prob = torch.cat(expert_log_prob, dim=0), torch.cat(expert_log_old_prob, dim=0) # torch.Size([64, 32])
+            gpu_log_prob, gpu_log_old_prob = torch.cat(gpu_log_prob, dim=0), torch.cat(gpu_log_old_prob, dim=0) # torch.Size([64, 4])
             
-            val = torch.stack(val).squeeze(-1)
-            expert_entropy = torch.stack(expert_entropy)
-            gpu_entropy = torch.stack(gpu_entropy)
+            val = torch.cat(val).squeeze() # torch.Size([64])
+            expert_entropy = torch.cat(expert_entropy).squeeze() # torch.Size([64])
+            gpu_entropy = torch.cat(gpu_entropy).squeeze() # torch.Size([64])
 
             # Compute advantages
             advantages = rewards_all_env - val.detach()
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
             # Policy loss
-            expert_loss_sum = 0
-            gpu_loss_sum = 0
-            value_loss_sum = 0
+            expert_loss_sum = torch.zeros(1, device=device)
+            gpu_loss_sum = torch.zeros(1, device=device)
+            value_loss_sum = torch.zeros(1, device=device)
             for j in range(configs.batch_size):
-                expert_ratios = torch.exp(expert_log_prob[j] - expert_log_old_prob[j].detach())
-                gpu_ratios = torch.exp(gpu_log_prob[j] - gpu_log_old_prob[j].detach())
+                expert_ratios = torch.exp(expert_log_prob[j] - expert_log_old_prob[j].detach()) # torch.Size([32])
+                gpu_ratios = torch.exp(gpu_log_prob[j] - gpu_log_old_prob[j].detach()) #  torch.Size([4])
 
-                print("rewards_all_env = ", rewards_all_env[j].shape, ", val = ", val[j].shape, "\n")
-                advantages = rewards_all_env[j] - val[j].detach() # 采取某个行动相对于平均行动的额外预期回报
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)  # 归一化优势
-
-                expert_surr1 = expert_ratios * advantages
-                expert_surr2 = torch.clamp(expert_ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-                expert_v_loss = self.MSE(val[j], rewards_all_env[j])
-                # 策略损失、熵损失(鼓励探索) Value loss
-                print("expert_surr1 = ", expert_surr1.shape, ", expert_surr2 = ", expert_surr2.shape, ", expert_entropy = ", expert_entropy.shape, "\n")
+                expert_surr1 = expert_ratios * advantages[j] # torch.Size([32])
+                expert_surr2 = torch.clamp(expert_ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages[j] # torch.Size([32])
                 expert_loss = -1 * torch.min(expert_surr1, expert_surr2) - entloss_coef * expert_entropy[j]
-                expert_loss_sum += expert_loss
+                expert_loss_sum += expert_loss.sum() # torch.Size([1])
 
-                gpu_surr1 = gpu_ratios * advantages
-                gpu_surr2 = torch.clamp(gpu_ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-                print("gpu_surr1 = ", gpu_surr1.shape, ", gpu_surr2 = ", gpu_surr2.shape, ", gpu_entropy = ", gpu_entropy.shape, "\n")
+                gpu_surr1 = gpu_ratios * advantages[j]
+                gpu_surr2 = torch.clamp(gpu_ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages[j]
                 gpu_loss = -1 * torch.min(gpu_surr1, gpu_surr2) - entloss_coef * gpu_entropy[j]
-                gpu_loss_sum += gpu_loss
+                gpu_loss_sum += gpu_loss.sum() # torch.Size([1])
 
                 value_loss = self.MSE(val[j], rewards_all_env[j])
-                value_loss_sum += value_loss
+                value_loss_sum += value_loss # torch.Size([1])
 
-            # take gradient step
-            total_loss = ploss_coef * (expert_loss_sum + gpu_loss_sum) + vloss_coef * value_loss_sum
-            self.optimizer.zero_grad()
-            total_loss.mean().backward()
-            # scheduler.step()
-            self.optimizer.step()
+            # Calculate the total loss
+            total_expert_loss = ploss_coef * expert_loss_sum / configs.batch_size
+            total_gpu_loss = ploss_coef * gpu_loss_sum / configs.batch_size
+            total_value_loss = vloss_coef * value_loss_sum / configs.batch_size
+
+            # take gradient step, scheduler.step()
+            self.expert_optimizer.zero_grad()
+            total_expert_loss.backward(retain_graph=True)
+            self.expert_optimizer.step()
+
+            self.gpu_optimizer.zero_grad()
+            total_gpu_loss.backward(retain_graph=True)
+            self.gpu_optimizer.step()
+
+            self.value_optimizer.zero_grad()
+            total_value_loss.backward()
+            self.value_optimizer.step()
 
             # Copy new weights into old policy
             self.policy_old_expert.load_state_dict(self.policy_expert.state_dict())
             self.policy_old_gpu.load_state_dict(self.policy_gpu.state_dict())
             
             if configs.decayflag:
-                self.scheduler.step()
+                self.expert_scheduler.step()
+                self.gpu_scheduler.step()
+                self.value_scheduler.step()
 
             return expert_loss_sum.mean().item(), gpu_loss_sum.mean().item(), value_loss_sum.mean().item()
+
+
+def g_pool_cal(graph_pool_type, batch_size, n_nodes, device):
+    if graph_pool_type == 'mean' or graph_pool_type == 'average':
+        def graph_pool(nodes):
+            return torch.mean(nodes, dim=1)  # mean pooling over the node features
+    elif graph_pool_type == 'sum':
+        def graph_pool(nodes):
+            return torch.sum(nodes, dim=1)  # sum pooling over the node features
+    else:
+        raise ValueError(f"Unsupported graph_pool_type: {graph_pool_type}")
+    
+    return graph_pool
+    
 
 def main(epochs):
     from uniform_instance import Simulate_Dataset
@@ -273,10 +290,6 @@ def main(epochs):
     env_expert_pool = g_pool_cal(graph_pool_type = configs.graph_pool_type,
                              batch_size = configs.batch_size,
                              n_nodes = configs.n_e,
-                             device = device)
-    env_gpu_pool = g_pool_cal(graph_pool_type = configs.graph_pool_type,
-                             batch_size = configs.batch_size,
-                             n_nodes = configs.n_g,
                              device = device)
 
     # 初始化PPO算法的参数, 并配置与 动态调度 问题相关的参数
@@ -310,6 +323,7 @@ def main(epochs):
         memory = Memory() # 存储过程数据
         ppo.policy_old_expert.train()
         ppo.policy_old_gpu.train()
+        ppo.policy_critic.train()
 
         times, losses, rewards2, critic_rewards = [], [], [], []
         start = time.time()
@@ -399,12 +413,14 @@ def main(epochs):
             memory.expert_logprobs.append(expert_log_prob)
             memory.gpu_logprobs.append(gpu_log_prob)
 
+            print("memory.env_done = ", env_done, "\n")
             memory.env_rewards.append(torch.tensor(env_rewards).float().permute(1, 0))
             memory.env_done.append(torch.tensor(env_done).float().permute(1, 0))
 
             # rewards
             ep_rewards -= env.posRewards
             # ppo.update
+            torch.autograd.set_detect_anomaly(True)
             expert_loss, gpu_loss, value_loss = ppo.update(memory, batch_idx)
 
             memory.clear_memory()
@@ -473,7 +489,6 @@ def main(epochs):
                 file_writing_obj1.write(str(validation_log))
                 t5 = time.time()
         np.savetxt('./N_%s_M%s_u100'%(configs.n_e,configs.n_g),costs,delimiter="\n")
-
 
 
 if __name__ == '__main__':

@@ -5,9 +5,7 @@ import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 import torch
 from Params import configs
-from Mhattention import ProbAttention
 from agent_utils import greedy_select_action, select_gpus
-from models.Pointer import Pointer
 INIT = configs.Init
 
 
@@ -119,7 +117,6 @@ class Expert_Actor(nn.Module):
         self._input = nn.Parameter(torch.Tensor(hidden_dim))
         self._input.data.uniform_(-1, 1).to(device)
         self.actor1 = MLPActor(3, hidden_dim * 3, hidden_dim, 1).to(device)
-        # self.critic = MLPCritic(num_mlp_layers_critic, hidden_dim, hidden_dim_critic, 1).to(device)
         if INIT:
             for name, p in self.named_parameters():
                 if 'weight' in name:
@@ -154,8 +151,7 @@ class Expert_Actor(nn.Module):
                 print("Greedy Select Expert Needed!\n")
 
             print("Selected expert indices: batch 0 = ", indices[0], ", batch N = ", indices[1])
-            h_pooled = torch.mean(h_nodes, dim=1)
-            print("Pooled expert nodes shape:", h_pooled.shape)
+            h_pooled = graph_pool(h_nodes)
 
             return indices, masked_probs, h_pooled
 

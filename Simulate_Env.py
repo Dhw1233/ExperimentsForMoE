@@ -273,18 +273,3 @@ class GANTT():
         plt.ylabel('机器号', size=20, fontdict={'family': 'SimSun'})
         plt.yticks(y_value, fontproperties='Times New Roman', size=20)
         plt.xticks(fontproperties='Times New Roman', size=20)
-
-
-    def gantt_plt(self,job, operation, mach_a, start_time, dur_a,number_of_experts):
-        '''
-        绘制甘特图
-        :param job: 工件号
-        :param operation: 工序号
-        :param mach_a: 机器号
-        :param start_time: 开始时间
-        :param dur_a: 加工时间
-        :param colors: 颜色列表
-        '''
-        colors = self.colour_gen(number_of_experts)
-        plt.barh(mach_a + 1, dur_a, 0.5, left=start_time, color=colors[job])
-        plt.text(start_time + dur_a / 10, mach_a + 0.9, 'J%s\nO%s' % (job + 1, operation + 1), size=6)
