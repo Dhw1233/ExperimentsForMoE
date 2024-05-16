@@ -130,14 +130,14 @@ class MultiLayerGNN(nn.Module):
     def __init__(self, node_feature_dim, hidden_dim, output_dim, num_layers):
         super(MultiLayerGNN, self).__init__()
         self.layers = nn.ModuleList()
-        
+        self.node_feature_dim = node_feature_dim
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
         # First layer
         self.layers.append(GraphConvolutionLayer(node_feature_dim, hidden_dim))
-        
         # Hidden layers
         for _ in range(num_layers - 2):
             self.layers.append(GraphConvolutionLayer(hidden_dim, hidden_dim))
-        
         # Output layer
         self.layers.append(GraphConvolutionLayer(hidden_dim, output_dim))
         
@@ -156,6 +156,10 @@ class MultiLayerGNN(nn.Module):
 class GPU_Encoder(nn.Module):
     def __init__(self, node_feature_dim, hidden_dim, output_dim, num_layers):
         super(GPU_Encoder, self).__init__()
+        self.node_feature_dim = node_feature_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_layers = num_layers
         self.gnn = MultiLayerGNN(node_feature_dim, hidden_dim, output_dim, num_layers)
 
     def forward(self, node_features, adj_matrix):

@@ -22,7 +22,7 @@ parser.add_argument('--num_layers', type=int, default=3, help='No. of layers of 
 parser.add_argument('--neighbor_pooling_type', type=str, default='average', help='neighbour pooling type')
 parser.add_argument('--graph_pool_type', type=str, default='average', help='graph pooling type')
 parser.add_argument('--expert_feature_dim', type=int, default=2, help='number of dimension of expert features')
-parser.add_argument('--gpu_feature_dim', type=int, default=2, help='number of dimension of GPU features')
+parser.add_argument('--gpu_feature_dim', type=int, default=3, help='number of dimension of GPU features')
 parser.add_argument('--input_dim', type=int, default=2, help='number of dimension of raw node features')
 parser.add_argument('--hidden_dim', type=int, default=64, help='hidden dim of MLP in fea extract GNN')
 parser.add_argument('--output_dim', type=int, default=32, help='output_dim dim of MLP in fea extract GNN')
