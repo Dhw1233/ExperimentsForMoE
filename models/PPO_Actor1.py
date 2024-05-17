@@ -70,7 +70,7 @@ class Expert_Decoder(nn.Module):
 
 class Expert_Actor(nn.Module):
     """ Integrated model for encoding experts' graph and decoding actions """
-    def __init__(self, feature_dim, hidden_dim, num_layers, num_experts, num_mlp_layers):
+    def __init__(self, feature_dim, hidden_dim, num_layers, num_experts, num_mlp_layers,*args,**kwargs):
         super(Expert_Actor, self).__init__()
         self.encoder = GNN(feature_dim, num_layers, hidden_dim, num_mlp_layers)
         self.decoder = Expert_Decoder(feature_dim, feature_dim, hidden_dim, num_mlp_layers)
@@ -96,7 +96,7 @@ class Expert_Actor(nn.Module):
 
 
 class MLPCritic(nn.Module):
-    def __init__(self, num_layers, input_dim, hidden_dim, output_dim):
+    def __init__(self, num_layers, input_dim, hidden_dim, output_dim,*args,**kwargs):
         super(MLPCritic, self).__init__()
         layers = []
         for i in range(num_layers):
