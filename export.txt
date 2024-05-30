@@ -1,0 +1,3 @@
+export DATA_FILE=/home/chenxiuyue/bert/bookcorpus/cache/extracted/990dba2f257920aac7c3b2935c19a2aefebc21ecdb5a3fec76e8a2dae54c3504/books_large_p1.txt
+export BERT_PRETRAIN=~/bert/uncased_L-12_H-768_A-12
+export SAVE_DIR=./pretraining

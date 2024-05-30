@@ -40,10 +40,10 @@ class Trainer(object):
         self.save_dir = save_dir
         self.device = device # device name
 
-    def train(self, get_loss, model_file=None, pretrain_file=None, data_parallel=True):
+    def train(self, get_loss, model_file, pretrain_file, data_parallel=True):
         """ Train Loop """
         self.model.train() # train mode
-        self.load(model_file, pretrain_file)
+        # self.load(model_file, pretrain_file)
         model = self.model.to(self.device)
         if data_parallel: # use Data Parallelism with Multi-GPU
             model = nn.DataParallel(model)
@@ -79,7 +79,7 @@ class Trainer(object):
     def eval(self, evaluate, model_file, data_parallel=True):
         """ Evaluation Loop """
         self.model.eval() # evaluation mode
-        self.load(model_file, None)
+        # self.load(model_file, './1.txt')
         model = self.model.to(self.device)
         if data_parallel: # use Data Parallelism with Multi-GPU
             model = nn.DataParallel(model)

@@ -15,6 +15,8 @@ import tokenization
 import models
 import optim
 import train
+import matplotlib.pyplot as plt
+import numpy as np
 
 from utils import set_seeds, get_device, get_random_word, truncate_tokens_pair
 
@@ -187,14 +189,24 @@ class BertModel4Pretrain(nn.Module):
         h_masked = self.norm(self.activ2(self.linear(h_masked)))
         logits_lm = self.decoder(h_masked) + self.decoder_bias
         logits_clsf = self.classifier(pooled_h)
-
+        layer_idx = 0
+        # for gate in all_layer_gate:
+            
+        #     # gate = gate.t()
+        #     gate = gate.detach().cpu().numpy()
+        #     print(gate)
+        #     # gate = gate.numpy()
+        #     plt.plot(gate)
+        #     plt.savefig(f"./output_gate/gate_{layer_idx}.png")
+        #     plt.close()
+        #     layer_idx = layer_idx+1
         return logits_lm, logits_clsf
 
 
 def main(train_cfg='config/pretrain.json',
          model_cfg='config/bert_base.json',
          data_file='../tbc/books_large_all.txt',
-         model_file=None,
+         model_file='./1.txt',
          data_parallel=True,
          vocab='../uncased_L-12_H-768_A-12/vocab.txt',
          save_dir='../exp/bert/pretrain',
@@ -247,7 +259,7 @@ def main(train_cfg='config/pretrain.json',
                            global_step)
         return loss_lm + loss_clsf
 
-    trainer.train(get_loss, model_file, None, data_parallel)
+    trainer.train(get_loss, model_file, './1.txt', data_parallel)
 
 
 if __name__ == '__main__':

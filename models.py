@@ -120,9 +120,38 @@ class PositionWiseFeedForward(nn.Module):
         # (B, S, D) -> (B, S, D_ff) -> (B, S, D)
         return self.fc2(gelu(self.fc1(x)))
 
+class MoE_Feedforward_layer(nn.Module):
+    """ FeedForward Neural Networks for each position """
+    def __init__(self, cfg,k = 5):
+        super().__init__()
+        self.input_dim = cfg.dim
+        self.hidden_dim = cfg.dim_ff
+        self.output_dim = cfg.dim_ff
+        self.expert_num = k
+        self.experts = nn.ModuleList(nn.Sequential(
+            nn.Linear(cfg.dim,cfg.dim_ff),
+            gelu(),
+            nn.Linear(cfg.dim_ff,cfg.dim)
+        ) for _ in range(k))
+        self.gate = nn.Sequential(
+            nn.Linear(cfg.dim,k),
+        )
+        #self.activ = lambda x: activ_fn(cfg.activ_fn, x)
 
-class Block(nn.Module):
-    """ Transformer Block """
+    def forward(self, x):
+        # (B, S, D) -> (B, S, D_ff) -> (B, S, D)
+        gates = self.gate(x)
+        gates = nn.functional.softmax(gates,dim = 2)
+        # print(gates.shape)
+        outputs = torch.stack([expert(x) for expert in self.experts],dim = 2)
+        y = torch.sum(gates.unsqueeze(-1)*outputs,dim = 2)
+        # print(y.shape)
+        return y,gates
+
+
+
+class PWFFBlock(nn.Module):
+    """ Transformer Block with position wise feedforward"""
     def __init__(self, cfg):
         super().__init__()
         self.attn = MultiHeadedSelfAttention(cfg)
@@ -135,20 +164,42 @@ class Block(nn.Module):
     def forward(self, x, mask):
         h = self.attn(x, mask)
         h = self.norm1(x + self.drop(self.proj(h)))
-        h = self.norm2(h + self.drop(self.pwff(h)))
+        h = self.pwff(h)
+        h = self.norm2(h + self.drop(h))
         return h
 
+class MoEFFBlock(nn.module):
+    """ Transformer Block with MoE feedforward"""
+        def __init__(self, cfg):
+        super().__init__()
+        self.attn = MultiHeadedSelfAttention(cfg)
+        self.proj = nn.Linear(cfg.dim, cfg.dim)
+        self.norm1 = LayerNorm(cfg)
+        self.MoEff = MoE_Feedforward_layer(cfg)
+        self.norm2 = LayerNorm(cfg)
+        self.drop = nn.Dropout(cfg.p_drop_hidden)
+
+    def forward(self, x, mask):
+        h = self.attn(x, mask)
+        h = self.norm1(x + self.drop(self.proj(h)))
+        h = self.MoEff(h)
+        h = self.norm2(h + self.drop(h))
+        return h
 
 class Transformer(nn.Module):
     """ Transformer with Self-Attentive Blocks"""
     def __init__(self, cfg):
         super().__init__()
         self.embed = Embeddings(cfg)
-        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layers)])
+        self.blocks = nn.ModuleList([MoEFFBlock(cfg) for _ in range(cfg.n_layers) if _ == 2 or _ == 5
+        or _ == 8 or _ == 11 else PWFFBlock(cfg)])
 
     def forward(self, x, seg, mask):
         h = self.embed(x, seg)
+        all_layer_gate = []
         for block in self.blocks:
             h = block(h, mask)
+            # print(gates.reshape(8*512,-1))
+            # all_layer_gate.append(gates.reshape(8*512,-1))
         return h
 
