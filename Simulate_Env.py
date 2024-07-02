@@ -28,7 +28,7 @@ class Simulate_Env(gym.Env, EzPickle):
     @override
     def reset(self, data):
         # 重置各类计数器和矩阵，为新的环境做准备
-        #data (batch_size, n_expert, n_expert)
+        #data (sample_cnt, n_expert, n_expert)
         self.batch_size = data.shape[0]
 
         experts_per_layer = self.number_of_experts // self.n_moe_layer

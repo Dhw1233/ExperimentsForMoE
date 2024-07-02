@@ -4,6 +4,7 @@ parser = argparse.ArgumentParser(description='Arguments for ppo_jssp')
 # args for device
 parser.add_argument('--device', type=str, default="cuda", help='Number of jobs of instances')
 # args for env
+parser.add_argument('--PolicyStep', type=int, default=10, help='the total step of old actor generate policies')
 parser.add_argument('--n_moe_layer', type=int, default=4, help='Number of MoE layers')
 parser.add_argument('--n_e', type=int, default=4*8, help='Number of experts per layer')
 parser.add_argument('--n_g', type=int, default=4, help='Number of GPUs')
@@ -21,6 +22,10 @@ parser.add_argument('--wkr_normalize_coef', type=int, default=1, help='Normalizi
 parser.add_argument('--num_layers', type=int, default=3, help='No. of layers of feature extraction GNN including input layer')
 parser.add_argument('--neighbor_pooling_type', type=str, default='average', help='neighbour pooling type')
 parser.add_argument('--graph_pool_type', type=str, default='average', help='graph pooling type')
+parser.add_argument('--expert_feature_dim', type=int, default=2, help='number of dimension of expert features')
+parser.add_argument('--gpu_feature_dim', type=int, default=3, help='number of dimension of GPU features')
+parser.add_argument('--expert_output_dim', type=int, default=2, help='number of dimension of expert features')
+parser.add_argument('--gpu_output_dim', type=int, default=3, help='number of dimension of GPU features')
 parser.add_argument('--input_dim', type=int, default=2, help='number of dimension of raw node features')
 parser.add_argument('--hidden_dim', type=int, default=64, help='hidden dim of MLP in fea extract GNN')
 parser.add_argument('--output_dim', type=int, default=32, help='output_dim dim of MLP in fea extract GNN')
@@ -30,11 +35,12 @@ parser.add_argument('--hidden_dim_actor', type=int, default=128, help='hidden di
 parser.add_argument('--num_mlp_layers_critic', type=int, default=2, help='No. of layers in critic MLP')
 parser.add_argument('--Init', type=bool, default=True, help='No. of layers in critic MLP')
 parser.add_argument('--hidden_dim_critic', type=int, default=32, help='hidden dim of MLP in critic')
+parser.add_argument('--gpu_num_heads', type=int, default=4, help='No. of heads in GAT')
 # args for PPO
 
 parser.add_argument('--ppo_step', type=int, default=3, help='No. of envs for training')
-parser.add_argument('--batch_size', type=int, default=64, help='No. of envs for training')
-parser.add_argument('--num_ins', type=int, default=6400, help='No. of envs for training')
+parser.add_argument('--batch_size', type=int, default=64, help='No. of envs and token routing for training')
+parser.add_argument('--num_ins', type=int, default=64, help='No. of envs for training')
 
 parser.add_argument('--max_updates', type=int, default=1000, help='No. of episodes of each env for training')
 parser.add_argument('--lr', type=float, default=1e-3, help='lr')
