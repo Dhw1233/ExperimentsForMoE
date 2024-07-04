@@ -145,7 +145,7 @@ class Simulate_Env(gym.Env, EzPickle):
         for i in range(self.batch_size):
             expert_selected = expert_indices[i]
             gpu_selected = gpu_bool_array[i]
-
+ 
             # update mask_expert :
             popularity_threshold = 0.1 # 假设我们根据 history_popularity 小于某个阈值来决定是否屏蔽
             for expert in range(self.number_of_experts):
@@ -243,33 +243,3 @@ class Simulate_Env(gym.Env, EzPickle):
         return self.expert_nodes, self.expert_links, self.gpu_nodes, self.gpu_links, self.mask_expert, self.mask_gpu, dur_time, gpu_done, rewards
 
 
-
-class GANTT():
-    def __init__(self,total_n_job,number_of_gpus):
-        super(GANTT, self).__init__()
-
-        self.total_n_job = total_n_job
-        self.number_of_gpus = number_of_gpus
-        self.initialize_plt()
-    def colour_gen(self,n):
-        '''
-        为工件生成随机颜色
-        :param n: 工件数
-        :return: 颜色列表
-        '''
-        color_bits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
-        colours = []
-        random.seed(234)
-        for i in range(n):
-            colour_bits = ['#']
-            colour_bits.extend(random.sample(color_bits, 6))
-            colours.append(''.join(colour_bits))
-        return colours
-    def initialize_plt(self):
-        plt.figure(figsize=((self.total_n_job * 1.5, self.number_of_gpus)))
-        y_value = list(range(1, 21))
-
-        plt.xlabel('Makespan', size=20, fontdict={'family': 'SimSun'})
-        plt.ylabel('机器号', size=20, fontdict={'family': 'SimSun'})
-        plt.yticks(y_value, fontproperties='Times New Roman', size=20)
-        plt.xticks(fontproperties='Times New Roman', size=20)

@@ -15,7 +15,7 @@ class Simulate_Dataset(Dataset):
     生成的数据样本表示了: 在第k个样本中, 专家i到专家j需要路由的token数量。
     '''
 
-    def __init__(self, n_e_per_layer, n_moe_layer, simu_tokens,batch_size, num_samples=1000, seed=None):
+    def __init__(self, n_e_per_layer, n_moe_layer, simu_tokens,batch_num,batch_size, num_samples, seed=None):
         super(Simulate_Dataset, self).__init__()
 
         # 设置随机种子
@@ -23,8 +23,8 @@ class Simulate_Dataset(Dataset):
             np.random.seed(seed)
         # 总专家数
         total_experts = int(n_moe_layer * n_e_per_layer)
-        tokens = np.zeros((int(batch_size),int(num_samples), total_experts, total_experts), dtype=int)
-        for batch in range(batch_size):
+        tokens = np.zeros((int(batch_size*batch_num),int(num_samples), total_experts, total_experts), dtype=int)
+        for batch in range(batch_size*batch_num):
         # 只在相邻层之间生成token数量
             for layer in range(n_moe_layer - 1):  # 不包括最后一层
                 start_id_current = int(layer * n_e_per_layer)

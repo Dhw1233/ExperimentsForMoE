@@ -225,8 +225,12 @@ class GPU_Decoder(nn.Module):
         action_probs = F.softmax(action_scores, dim=1)
 
         # Determine expand/shrink actions
-        gpu_actions = action_probs > 0.5
-        return action_probs, gpu_actions
+        if self.training:  # Sampling strategy during training
+            distribution = torch.distributions.Categorical(action_probs)
+            gpu_chosen = distribution.sample()
+        else:  # Greedy strategy during evaluation
+            gpu_chosen = torch.argmax(action_probs, dim=1)
+        return action_probs, gpu_chosen
 
 class EXPERT_ACTOR(nn.Module):
     def __init__(self,expert_feature_dim, 
@@ -312,6 +316,11 @@ class GPU_ACTOR(nn.Module):
         self.gp_decoder = GPU_Decoder(input_dim=2*gpu_output_dim+expert_output_dim,hidden_dim=hidden_dim,
                                     output_dim=1,num_layers=num_decoder_layers)
         
+        self.ac_decoder = MLPCritic(num_layers=1,
+                                    input_dim=gpu_output_dim,
+                                    hidden_dim=hidden_dim,
+                                    output_dim=2)
+        
         self.critic = MLPCritic(num_layers=num_critic_layers,
                                 input_dim=num_experts*expert_output_dim+num_gpus*gpu_output_dim,
                                 hidden_dim=hidden_dim,
@@ -325,19 +334,17 @@ class GPU_ACTOR(nn.Module):
         
         ep_index = ep_index.unsqueeze(1).unsqueeze(1).expand(-1,-1,h_ep_node.size(2))
 
-        if  old_policy:
+        gp_probs,gp_index = self.gp_decoder(h_gp_node,h_gp_global,torch.gather(h_ep_node,1,ep_index).squeeze(1),mask_gp)
 
-            gp_probs,gp_index = self.gp_decoder(h_gp_node,h_gp_global,torch.gather(h_ep_node,1,ep_index).squeeze(1),mask_gp)
-            
-            return gp_probs,gp_index
+        chosen_prob = F.softmax(self.ac_decoder(torch.gather(h_gp_node,1,gp_index)),dim=1)
+
+        distribution = torch.distributions.Categorical(chosen_prob)
+
+        acts = distribution.sample()
         
-        else:
-
-            gp_probs,gp_index = self.gp_decoder(h_gp_node,h_gp_global,torch.gather(h_ep_node,1,ep_index).squeeze(1),mask_gp)
-
-
-            return gp_probs,gp_index
+        return gp_probs,gp_index,chosen_prob,acts
         
+
 class MLPCritic(nn.Module):
     def __init__(self, num_layers, input_dim, hidden_dim, output_dim):
         super(MLPCritic, self).__init__()

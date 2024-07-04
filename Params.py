@@ -39,6 +39,7 @@ parser.add_argument('--gpu_num_heads', type=int, default=4, help='No. of heads i
 # args for PPO
 
 parser.add_argument('--ppo_step', type=int, default=3, help='No. of envs for training')
+parser.add_argument('--batch_num',type=int,default=10,help='total batch number')
 parser.add_argument('--batch_size', type=int, default=64, help='No. of envs and token routing for training')
 parser.add_argument('--num_ins', type=int, default=64, help='No. of envs for training')
 

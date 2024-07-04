@@ -1,3 +1,4 @@
+import torch._logging
 from agent_utils import eval_actions
 from agent_utils import select_gpus
 from models.PPO_Actor1 import EXPERT_ACTOR, GPU_ACTOR, MLPCritic
@@ -31,6 +32,9 @@ class Memory:
         self.mask_gpu = []
         self.gpu_logprobs = [] # gpu 的 log 概率
         
+        self.act_selection = [] #gpu add/delete
+        self.act_logprobs = [] #act的log概率
+
         self.env_rewards = [] # 奖励
         self.env_done = []
 
@@ -50,7 +54,8 @@ class Memory:
         
         del self.env_rewards[:]
         del self.env_done[:]
-
+        del self.act_logprobs[:]
+        del self.act_selection[:]
 
 class PPO:
     def __init__(self,
@@ -221,7 +226,7 @@ class PPO:
                                                                             mask_gp=env_mask_gpu,
                                                                             old_policy = False)
 
-                gpu_prob,gpu_index = self.gpu_policy(ep_nodes=env_expert_nodes,
+                gpu_prob,gpu_index,act_prob,act_index = self.gpu_policy(ep_nodes=env_expert_nodes,
                                                                             ep_links=env_expert_links,
                                                                             gp_nodes=env_gpu_nodes, 
                                                                             gp_links=env_gpu_links,
@@ -261,7 +266,7 @@ class PPO:
             expert_loss_sum = torch.zeros(1, device=device)
             gpu_loss_sum = torch.zeros(1, device=device)
             value_loss_sum = torch.zeros(1, device=device)
-            for j in range(configs.batch_size):
+            for j in range(configs.num_ins):
                 for i in range(len(memories.expert_node_fea)):
                     ep_index=memories.expert_selection[i][j]
                     gp_index=memories.gpu_selection[i][j]
@@ -283,9 +288,9 @@ class PPO:
                 value_loss_sum += value_loss # torch.Size([1])
 
             # Calculate the total loss
-            total_expert_loss = ploss_coef * expert_loss_sum / configs.batch_size
-            total_gpu_loss = ploss_coef * gpu_loss_sum / configs.batch_size
-            total_value_loss = vloss_coef * value_loss_sum / configs.batch_size
+            total_expert_loss = ploss_coef * expert_loss_sum / configs.num_ins
+            total_gpu_loss = ploss_coef * gpu_loss_sum / configs.num_ins
+            total_value_loss = vloss_coef * value_loss_sum / configs.num_ins
 
             # take gradient step, scheduler.step()
             self.expert_optimizer.zero_grad()
@@ -331,15 +336,13 @@ def main(epochs):
     # 这里是随机生成的样本，需修改模拟器！
     simu_tokens = 50 # 假设每对专家之间最多有50个token
     n_e_per_layer = configs.n_e / configs.n_moe_layer
-    train_dataset = Simulate_Dataset(n_e_per_layer, configs.n_moe_layer, simu_tokens,configs.batch_size, configs.num_ins, 200)
-    validat_dataset = Simulate_Dataset(n_e_per_layer, configs.n_moe_layer, simu_tokens, 64, 200)
+    train_dataset = Simulate_Dataset(n_e_per_layer, configs.n_moe_layer, simu_tokens,configs.batch_num,configs.batch_size, configs.num_ins, 200)
+    validat_dataset = Simulate_Dataset(n_e_per_layer, configs.n_moe_layer, simu_tokens,configs.batch_num,configs.batch_size, configs.num_ins, 200)
     # print("Simulate Val-Dataset Success!\n", validat_dataset.getdata()[0,0,:], "\n")
     SampleCnt = configs.num_ins 
     StateCnt = 10
     data_loader = DataLoader(train_dataset, batch_size=configs.batch_size)
     valid_loader = DataLoader(validat_dataset, batch_size=configs.batch_size)
-    '''ppo.policy_old_expert.to(device)
-    ppo.policy_old_gpu.to(device)'''
 
     record = 1000000
     for epoch in range(epochs):
@@ -358,7 +361,7 @@ def main(epochs):
             #每个batch有batchsize个样本，每个样本有SampleCnt个经验，每个经验有StateCnt个阶段
             # env.reset函数
             expert_links, expert_nodes, gpu_links, gpu_nodes, mask_expert, mask_gpu = env.reset(data[batch_idx,:,:,:])
-
+            act_log_prob = []
             expert_log_prob = []
             gpu_log_prob = []
             env_rewards = []
@@ -386,7 +389,7 @@ def main(epochs):
                                                                             mask_gp=env_mask_gpu,
                                                                             old_policy = True)
 
-                gpu_prob,gpu_index = ppo.old_gpu_policy(ep_nodes=env_expert_nodes,
+                gpu_prob,gpu_index,act_prob,act_index = ppo.old_gpu_policy(ep_nodes=env_expert_nodes,
                                                                             ep_links=env_expert_links,
                                                                             gp_nodes=env_gpu_nodes, 
                                                                             gp_links=env_gpu_links,
@@ -405,12 +408,13 @@ def main(epochs):
                 memory.gpu_node_fea.append(env_gpu_nodes)
                 memory.gpu_link_fea.append(env_gpu_links)
                 gpu_log_prob.append(torch.log(gpu_prob+1e-10))
-
+                act_log_prob.append(torch.log(act_prob+1e-10))
                 memory.mask_expert.append(env_mask_expert)
                 memory.mask_gpu.append(env_mask_gpu)
                 # 向环境提交选择的动作和机器，接收新的状态、奖励和完成标志等信息
                 expert_nodes, expert_links, gpu_nodes, gpu_links, mask_expert, mask_gpu, dur_time, gpu_done, reward = env.step(expert_index.cpu().numpy(),
-                                                                                                gpu_index,
+                                                                                                gpu_index.cpu.numpy(),
+                                                                                                act_index.cpu.numpy(),
                                                                                                 data)
                 ep_rewards += reward
                 done_list = [0 for _ in range(SampleCnt)]
@@ -435,7 +439,7 @@ def main(epochs):
             log.append([batch_idx, mean_time])
 
             # 定期日志记录
-            if batch_idx % 100 == 0:
+            if batch_idx %  10== 0:
                 file_writing_obj = open(
                     './' + 'log_' + str(configs.n_e) + '_' + str(configs.n_g) + '_' + str(configs.low) + '_' + str(
                         configs.high) + '.txt', 'w')
@@ -448,7 +452,7 @@ def main(epochs):
 
             cost = time.time() - start
             costs.append(cost)
-            step = 10
+            step = 5
 
             filepath = 'saved_network'
             # 定期模型保存
@@ -478,7 +482,7 @@ def main(epochs):
 
                 # 性能评估与验证，用于实时监控模型的学习进度和性能
                 t4 = time.time()
-                validation_log = validate(valid_loader, configs.batch_size, ppo.policy_expert, ppo.policy_gpu).mean()
+                validation_log = validate(valid_loader, configs.batch_size, ppo.expert_policy, ppo.gpu_policy).mean()
                 if validation_log<record: # 保存最佳模型
                     epoch_dir = os.path.join(filepath, 'best_value100')
                     if not os.path.exists(epoch_dir):
