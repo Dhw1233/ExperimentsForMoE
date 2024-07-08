@@ -336,11 +336,13 @@ class GPU_ACTOR(nn.Module):
 
         gp_probs,gp_index = self.gp_decoder(h_gp_node,h_gp_global,torch.gather(h_ep_node,1,ep_index).squeeze(1),mask_gp)
 
-        chosen_prob = F.softmax(self.ac_decoder(torch.gather(h_gp_node,1,gp_index)),dim=1)
+        gp_index_1 = gp_index.unsqueeze(1).unsqueeze(1).expand(-1,-1,h_gp_node.size(2))
+
+        chosen_prob = F.softmax(self.ac_decoder(torch.gather(h_gp_node,1,gp_index_1)),dim=1).squeeze()
 
         distribution = torch.distributions.Categorical(chosen_prob)
 
-        acts = distribution.sample()
+        acts = distribution.sample().squeeze(-1)
         
         return gp_probs,gp_index,chosen_prob,acts
         
