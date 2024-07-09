@@ -10,25 +10,76 @@ import random
 import matplotlib.pyplot as plt
 import time
 
-def calculate_workload_ratios(capacities, bandwidths, local_gpu_id, expert_gpu_ids):
-    total_capacity = sum(capacities[gpu_id] for gpu_id in expert_gpu_ids)
-    capacity_ratios = [capacities[gpu_id] / total_capacity for gpu_id in expert_gpu_ids]
-    
-    total_bandwidth = sum(bandwidths[local_gpu_id][gpu_id] for gpu_id in expert_gpu_ids)
-    bandwidth_ratios = [bandwidths[local_gpu_id][gpu_id] / total_bandwidth for gpu_id in expert_gpu_ids]
-    
-    # 综合考虑容量比例和带宽比例
-    combined_ratios = [(capacity_ratios[i] + bandwidth_ratios[i]) / 2 for i in range(len(expert_gpu_ids))]
-    return combined_ratios
-
 def calculate_expert_gpu(expert_id,n_g,n_e):
     return expert_id*n_g // n_e
 
 def calculate_token_gpu(token_id,n_g,n_token):
     return token_id*n_g // n_token
 
-def calculate_reward(replica_p,history_expert_gpu,expert_gradsize,expert_size,token_size,gpu_links,gpu_nodes,expert_nodes):
-    return random.random()
+def calculate_reward(replica_p,n_g,n_e,expert_gradsize,link,token_size,gpu_links,expert_nodes,Tsend):
+    '''
+    replica_p:[n_e,list],replica_list
+    expert_size:the size of expert parameters
+    gpu_links:[n_g,n_g,2],bandwidth and gpu traffic
+    gpu_nodes:[n_g,3],computation eff,memory
+
+    '''
+    throughput = 0.6
+    Ta2a = max([sum(gpu_links[:,g,1]/gpu_links[:,g,0]) for g in range(n_g)])
+    Tmfc = max([expert_nodes[e,0]*token_size/throughput for e in range(n_e)])
+    Tsend = Tsend
+    ep_gp = n_e // n_g
+    gpu_cnt = np.zeros((n_g,))
+    for ep in range(n_e):
+        for gp in replica_p[ep]:
+            gpu_cnt[gp] += 1
+    max_gp = 0
+    gp_s = 0
+    for gp in range(n_g):
+        if gpu_cnt[gp]>max_gp:
+            gp_s = gp
+            max_gp = gpu_cnt[gp]
+    Tallreduce = expert_gradsize*(2*(ep_gp-1)/ep_gp)*(max_gp+ep_gp)*n_g/sum(gpu_links[gp_s,:,0])
+
+    return 4*Ta2a+3*Tmfc+Tsend+Tallreduce
+
+def calculate_gpu_link(tk_expert,n_e,n_g,token_size,bandwidth,compu,placepolicy,M=50):
+    '''
+    tk_expert:[n_g,n_e],the total number of token transmitted from gpu_i to expert_j 
+    n_e: number of experts
+    n_g: number of gpus
+    token_size: the size of one token
+    bandwidth:[n_g,n_g],bandwidth between two gpus
+    compu: the computation speed of one gpu 
+    placepolicy: expert replica list
+    '''
+    gpulink = np.zeros((n_g,n_g))
+    gpuexpertlink = np.zeros((n_g,n_e,n_g))
+    finallink = np.zeros((n_g,n_e,n_g))
+    minn = 0x7fffff
+    for _ in range(5):
+        #generate gpuexpertlink
+        for expert in range(n_e):
+            gpu = calculate_expert_gpu(expert,n_g,n_e)
+            candidate_gpu = placepolicy[expert] + [gpu]
+            # print(gpu)
+            size = len(candidate_gpu)
+            for gpu_id in range(n_g):
+                random_numbers = np.random.rand(size)
+                probabilities = random_numbers / random_numbers.sum()
+                for index in range(size):
+                    gpuexpertlink[gpu_id,expert,candidate_gpu[index]] += tk_expert[gpu_id,expert]*probabilities[index]
+
+        goal = max([sum([sum([gpuexpertlink[g,e,g_]*token_size/bandwidth[g,g_] for g in range(n_g)]) for e in range(n_e)])+
+                    max([sum([gpuexpertlink[g,e,g_]/compu[g] for g in range(n_g)]) for e in range(n_e)]) for g_ in range(n_g)])
+        if goal<minn:
+            #generate gpulink
+            minn = goal
+            gpulink = np.sum(gpuexpertlink,axis=1)
+            finallink = gpuexpertlink
+
+    return gpulink,finallink
+
 class Simulate_Env(gym.Env, EzPickle):
     def __init__(self,
                  n_moe_layer,
@@ -154,7 +205,6 @@ class Simulate_Env(gym.Env, EzPickle):
         # 执行动作，维护和更新环境状态，计算奖励
         t1 = time.time()
         rewards, gpu_done = [],[]
-        self.gpu_links = np.zeros((self.batch_size, self.number_of_gpus, self.number_of_gpus, 2))
         self.current_token = np.zeros((self.batch_size, self.number_of_experts))
         for i in range(self.batch_size):
             #calculate replica_list
@@ -163,29 +213,39 @@ class Simulate_Env(gym.Env, EzPickle):
             act_selected = act_index[i]
             links_matrix = np.zeros((self.number_of_experts, self.number_of_experts), dtype=float)
             # print("actions:",expert_selected,gpu_selected,act_selected)
-            if act_selected == 1:
-                self.replica_p[i][expert_selected].append(gpu_selected)
-            else:
-                if gpu_selected in self.replica_p[i][expert_selected]:
-                    self.replica_p[i][expert_selected].remove(gpu_selected)
-
-            # update expert_node and gpu_links,LP to be realized,待实现
-            for layer in range(self.n_moe_layer):
-                for token in range(self.token_num):
-                    expert = data[i,token,layer]
-                    token_gpu = calculate_token_gpu(token,self.number_of_gpus,self.token_num)
-                    expert_gpu = calculate_expert_gpu(expert,self.number_of_gpus,self.number_of_experts)
-                    self.gpu_links[i,token_gpu,expert_gpu] += 1
-                    self.current_token[i,expert] += 1
-            
-            for expert in range(self.number_of_experts):
-                self.history_popularity[i, expert] = self.history_popularity[i, expert] * 0.9 + self.current_token[i, expert] * 0.1
-
             # update expert_links :
             alpha = 0.6  # 调节当前数据和历史数据的权重
             for layer in range(self.n_moe_layer-1):
                 for token in range(self.token_num):
                     links_matrix[data[i,token,layer],data[i,token,layer+1]] += 1
+
+            if act_selected == 1:
+                self.replica_p[i][expert_selected].append(gpu_selected)
+                expert_gpu = calculate_expert_gpu(expert_selected,self.number_of_gpus,self.number_of_experts)
+                Tsend = self.expert_size / self.gpu_links[i,expert_gpu,gpu_selected,0]
+            else:
+                if gpu_selected in self.replica_p[i][expert_selected]:
+                    self.replica_p[i][expert_selected].remove(gpu_selected)
+                Tsend = 0
+            # update expert_node and gpu_links,LP to be realized,待实现
+            # 1.计算每个expert在每个gpu上得到的token个数
+            # 2.通过解线性规划求得跨gpu的传输量
+            tk_gpu = np.zeros((self.number_of_gpus,self.number_of_experts))
+            for layer in range(self.n_moe_layer):
+                for token in range(self.token_num):
+                    expert = data[i,token,layer]
+                    token_gpu = calculate_token_gpu(token,self.number_of_gpus,self.token_num)
+                    expert_gpu = calculate_expert_gpu(expert,self.number_of_gpus,self.number_of_experts)
+                    tk_gpu[token_gpu,expert] += 1
+                    self.current_token[i,expert] += 1
+            
+            self.gpu_links[i,:,:,1],link = calculate_gpu_link(tk_gpu,self.number_of_experts,self.number_of_gpus,self.token_size,self.gpu_links[i,:,:,0],
+                                                         self.gpu_nodes[i,:,0],self.replica_p[i],50)
+
+            for expert in range(self.number_of_experts):
+                self.history_popularity[i, expert] = self.history_popularity[i, expert] * 0.9 + self.current_token[i, expert] * 0.1
+
+
                     
             for ii in range(self.number_of_experts):
                 for j in range(self.number_of_experts):
@@ -220,8 +280,8 @@ class Simulate_Env(gym.Env, EzPickle):
                 self.gpu_nodes[i, j, 2] = np.clip(old_available_memory, 0, None)  # 更新available_memory并确保不为负
                 # update mask_gpu
                 self.mask_gpu[i, j] = self.gpu_nodes[i, j, 1] > 0.9
-            reward  = calculate_reward(self.replica_p[i],self.history_expert_gpu[i],self.expert_gradsize,self.expert_size,
-                                      self.token_size,self.gpu_links[i],self.gpu_nodes[i],self.expert_nodes[i])
+            reward  = calculate_reward(self.replica_p[i],self.number_of_gpus,self.number_of_experts,self.expert_gradsize,link,
+                                      self.token_size,self.gpu_links[i],self.expert_nodes[i],Tsend)
             rewards.append(reward)
 
         t2 = time.time()

@@ -157,9 +157,8 @@ class PPO:
         self.MSE = nn.MSELoss()
 
     def update(self, memories, epoch):
-        '''self.policy_expert.train()
-        self.policy_gpu.train()
-        self.policy_critic.train()'''
+        self.expert_policy.train()
+        self.gpu_policy.train()
 
         vloss_coef = configs.vloss_coef
         ploss_coef = configs.ploss_coef
@@ -208,13 +207,11 @@ class PPO:
             gpu_log_old_prob = memories.gpu_logprobs[0]
             act_log_old_prob = memories.act_logprobs[0]
 
-            pool=None
             for i in range(len(memories.expert_node_fea)):
                 env_expert_nodes = memories.expert_node_fea[i].float()
                 env_expert_links = memories.expert_link_fea[i].float()
                 env_gpu_nodes = memories.gpu_node_fea[i].float()
                 env_gpu_links = memories.gpu_link_fea[i].float()
-                old_expert = memories.expert_selection[i]
                 env_mask_expert = memories.mask_expert[i]
                 env_mask_gpu = memories.mask_gpu[i]
 
@@ -317,15 +314,14 @@ class PPO:
             total_act_loss.backward(retain_graph=True)
             self.gpu_optimizer.step()
 
-            # Copy new weights into old policy
-            self.old_expert_policy.load_state_dict(self.expert_policy.state_dict())
-            self.old_gpu_policy.load_state_dict(self.gpu_policy.state_dict())
             
             if configs.decayflag:
                 self.expert_scheduler.step()
                 self.gpu_scheduler.step()
 
-            return expert_loss_sum.mean().item(), gpu_loss_sum.mean().item(), act_loss_sum.mean().item(),value_loss_sum.mean().item()
+        self.old_expert_policy.load_state_dict(self.expert_policy.state_dict())
+        self.old_gpu_policy.load_state_dict(self.gpu_policy.state_dict())
+        return expert_loss_sum.mean().item(), gpu_loss_sum.mean().item(), act_loss_sum.mean().item(),value_loss_sum.mean().item()
     
 
 def main(epochs):
