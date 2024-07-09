@@ -2,77 +2,71 @@ from Params import configs
 from copy import deepcopy
 from Simulate_Env import Simulate_Env
 import copy
+from uniform_instance import Simulate_Dataset
 from agent_utils import sample_select_action
 from agent_utils import greedy_select_action
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from Params import configs
-def validate(vali_set,batch_size, policy_jo,policy_mc):
-    policy_job = copy.deepcopy(policy_jo)
-    policy_mch = copy.deepcopy(policy_mc)
-    policy_job.eval()
-    policy_mch.eval()
+def validate(vali_set,batch_size, policy_expert,policy_gpu):
+    policy_expert = copy.deepcopy(policy_expert)
+    policy_gpu = copy.deepcopy(policy_gpu)
+    policy_expert.eval()
+    policy_gpu.eval()
     def eval_model_bat(bat,i):
         C_max = []
         with torch.no_grad():
             data = bat.numpy()
 
-            env = FJSP(n_j=configs.n_j, n_m=configs.n_m)
-            gantt_chart = GANTT( configs.n_j, configs.n_m)
+            env = Simulate_Env(configs.n_moe_layer, configs.n_e, configs.n_g)    
             device = torch.device(configs.device)
-            g_pool_step = g_pool_cal(graph_pool_type=configs.graph_pool_type,
-                                     batch_size=torch.Size(
-                                         [batch_size, configs.n_j * configs.n_m, configs.n_j * configs.n_m]),
-                                     n_nodes=configs.n_j * configs.n_m,
-                                     device=device)
+            expert_links, expert_nodes, gpu_links, gpu_nodes, mask_expert, mask_gpu = env.reset(data[0,:,:,:],simu_tokens,configs.expert_size
+                                                                                                ,configs.expert_gradsize,configs.token_size)
 
-            adj, fea, candidate, mask, mask_mch, dur, mch_time, job_time = env.reset(data)
-
-            j = 0
-
+            n_e_per_layer = configs.n_e // configs.n_moe_layer
+            simu_tokens = 50
             ep_rewards = - env.initQuality
-            rewards = []
-            env_mask_mch = torch.from_numpy(np.copy(mask_mch)).to(device)
-            env_dur = torch.from_numpy(np.copy(dur)).float().to(device)
-            pool=None
-            while True:
-                env_adj = aggr_obs(deepcopy(adj).to(device).to_sparse(), configs.n_j * configs.n_m)
-                env_fea = torch.from_numpy(np.copy(fea)).float().to(device)
-                env_fea = deepcopy(env_fea).reshape(-1, env_fea.size(-1))
-                env_candidate = torch.from_numpy(np.copy(candidate)).long().to(device)
-                env_mask = torch.from_numpy(np.copy(mask)).to(device)
-                env_mch_time = torch.from_numpy(np.copy(mch_time)).float().to(device)
-                # env_job_time = torch.from_numpy(np.copy(job_time)).float().to(device)
-                action, a_idx, log_a, action_node, _, mask_mch_action, hx = policy_job(x=env_fea,
-                                                                                               graph_pool=g_pool_step,
-                                                                                               padded_nei=None,
-                                                                                               adj=env_adj,
-                                                                                               candidate=env_candidate
-                                                                                               , mask=env_mask
-                                                                                               , mask_mch=env_mask_mch
-                                                                                               , dur=env_dur
-                                                                                               , a_index=0
-                                                                                               , old_action=0
-                                                                                                ,mch_pool=pool
-                                                                                               ,old_policy=True,
-                                                                                                T=1
-                                                                                               ,greedy=True
-                                                                                               )
+            SampleCnt = configs.batchsize
 
-                pi_mch,pool = policy_mch(action_node, hx, mask_mch_action, env_mch_time)
+            StateCnt = 10
+            for state in range(1,StateCnt):
+                data1 = Simulate_Dataset(n_e_per_layer,configs.n_e, configs.n_g,configs.n_moe_layer, simu_tokens,1,1, configs.num_ins, 200)
+                data1 = data1[0,:,:,:] #生成后继状态
+                env_expert_links = deepcopy(torch.Tensor(expert_links)).to(device) # torch.Size([n_e, n_e])
+                env_expert_nodes = deepcopy(torch.Tensor(expert_nodes)).to(device) # torch.Size([n_e, fea_dim = 2])
+                env_gpu_links = deepcopy(torch.Tensor(gpu_links)).to(device) # torch.Size([n_g, n_g])
+                env_gpu_nodes = deepcopy(torch.Tensor(gpu_nodes)).to(device) # torch.Size([n_g, fea_dim = 3])
 
-                _, mch_a = pi_mch.squeeze(-1).max(1)
+                env_mask_expert = torch.from_numpy(np.copy(mask_expert)).to(device)
+                env_mask_gpu = torch.from_numpy(np.copy(mask_gpu)).to(device)
+                expert_prob,expert_index= policy_expert(ep_nodes=env_expert_nodes,
+                                                                            ep_links=env_expert_links,
+                                                                            gp_nodes=env_gpu_nodes, 
+                                                                            gp_links=env_gpu_links,
+                                                                            mask_ep=env_mask_expert,
+                                                                            mask_gp=env_mask_gpu,
+                                                                            old_policy = True)
 
-                adj, fea, reward, done, candidate, mask,job,_,mch_time,job_time = env.step(action.cpu().numpy(), mch_a,gantt_chart)
-                #rewards += reward
+                gpu_prob,gpu_index,act_prob,act_index = policy_gpu(ep_nodes=env_expert_nodes,
+                                                                            ep_links=env_expert_links,
+                                                                            gp_nodes=env_gpu_nodes, 
+                                                                            gp_links=env_gpu_links,
+                                                                            mask_ep=env_mask_expert,
+                                                                            mask_gp=env_mask_gpu,
+                                                                            ep_index=expert_index,
+                                                                            old_policy = True)
 
-                j += 1
-                if env.done():
-                    #plt.savefig("./3020_%s.svg"%i, format='svg',dpi=300, bbox_inches='tight')
-                    #plt.show()
-                    break
-            cost = env.mchsEndTimes.max(-1).max(-1)
+                # 向环境提交选择的动作和机器，接收新的状态、奖励和完成标志等信息
+                expert_nodes, expert_links, gpu_nodes, gpu_links, mask_expert, mask_gpu, dur_time, reward = env.step(expert_index.cpu().numpy(),
+                                                                                                gpu_index.cpu().numpy(),
+                                                                                                act_index.cpu().numpy(),
+                                                                                                data1)
+                ep_rewards += reward
+                done_list = [0 for _ in range(SampleCnt)]
+                done =[1 for _ in range(SampleCnt)]
+                
+            cost = ep_rewards
             C_max.append(cost)
         return torch.tensor(cost)
     #make_spans.append(rewards - env.posRewards)
