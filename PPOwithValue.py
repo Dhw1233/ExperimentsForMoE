@@ -214,7 +214,7 @@ class PPO:
                 env_gpu_links = memories.gpu_link_fea[i].float()
                 env_mask_expert = memories.mask_expert[i]
                 env_mask_gpu = memories.mask_gpu[i]
-
+                tt = time.time()
                 expert_prob,expert_index,v=self.expert_policy(ep_nodes=env_expert_nodes,
                                                                             ep_links=env_expert_links,
                                                                             gp_nodes=env_gpu_nodes, 
@@ -231,7 +231,8 @@ class PPO:
                                                                             mask_gp=env_mask_gpu,
                                                                             ep_index=expert_index,
                                                                             old_policy = False)
-
+                ttt = time.time()
+                print("inference_time:",ttt-tt)
                 # Combine (action_e, action_g)
                 val.append(v.squeeze().to(torch.float32))
 

@@ -18,14 +18,14 @@ def validate(vali_set,batch_size, policy_expert,policy_gpu):
         C_max = []
         with torch.no_grad():
             data = bat.numpy()
-
+            simu_tokens = 50
             env = Simulate_Env(configs.n_moe_layer, configs.n_e, configs.n_g)    
             device = torch.device(configs.device)
             expert_links, expert_nodes, gpu_links, gpu_nodes, mask_expert, mask_gpu = env.reset(data[0,:,:,:],simu_tokens,configs.expert_size
                                                                                                 ,configs.expert_gradsize,configs.token_size)
 
             n_e_per_layer = configs.n_e // configs.n_moe_layer
-            simu_tokens = 50
+            
             ep_rewards = - env.initQuality
             SampleCnt = configs.batchsize
 
