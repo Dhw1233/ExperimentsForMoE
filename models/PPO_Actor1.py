@@ -176,12 +176,11 @@ class Expert_Decoder(nn.Module):
         if INIT:
             initialize_weights(self)
 
-    def forward(self, h_node, h_global, h_pooled_gpu, mask):
+    def forward(self, h_node, h_global):
         # print(f"Expert_Decoder forward: h_node.shape = {h_node.shape}, h_global.shape = {h_global.shape}, u.shape = {u.shape}")
         # Expand h_global and concatenate it with h_node and u
         h_global_expanded = h_global.unsqueeze(1).expand(-1, h_node.size(1), -1)
-        u_expanded = h_pooled_gpu.unsqueeze(1).expand(-1, h_node.size(1), -1)
-        h_combined = torch.cat([h_node, h_global_expanded, u_expanded], dim=-1)
+        h_combined = torch.cat([h_node, h_global_expanded], dim=-1)
         # print(f"h_combined.shape = {h_combined.shape}")
 
         batch_size, expert_num, feature_dim = h_combined.size()
@@ -190,7 +189,6 @@ class Expert_Decoder(nn.Module):
 
         # action_scores = self.mlp(h_combined).squeeze(-1)
         # Masking and softmax
-        action_scores = action_scores.masked_fill(mask, float('-inf')).squeeze(-1)
         action_probs = F.softmax(action_scores, dim=1)
         
         # Sampling or greedy action selection
@@ -207,7 +205,7 @@ class GPU_Decoder(nn.Module):
     """ Actor to compute GPU action scores based on combined embeddings """
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super(GPU_Decoder, self).__init__()
-        self.mlp = MLPtanh(input_dim, hidden_dim, output_dim, num_layers)
+        self.mlp = MLPtanh(input_dim, hidden_dim, output_dim * 3, num_layers)
         if INIT:
             initialize_weights(self)
 
@@ -255,9 +253,6 @@ class EXPERT_ACTOR(nn.Module):
                                           output_dim=expert_output_dim, num_layers=num_layers,
                                             num_mlp_layers=num_encoder_layers)
         
-        self.gp_encoder = GPU_Encoder( gpu_feature_dim=gpu_feature_dim, hidden_dim=hidden_dim,
-                                       output_dim=gpu_output_dim, num_layers=num_layers,
-                                         num_mlp_layers=num_encoder_layers)
         
         self.ep_decoder = Expert_Decoder(input_dim=2*expert_output_dim+gpu_output_dim, hidden_dim=hidden_dim,
                                         output_dim=1, num_layers = num_decoder_layers)
@@ -268,23 +263,20 @@ class EXPERT_ACTOR(nn.Module):
                                 hidden_dim=hidden_dim,
                                 output_dim=1)
         
-    def forward(self,ep_nodes, ep_links,gp_nodes, gp_links,mask_ep,mask_gp,old_policy):
+    def forward(self,ep_nodes, ep_links,old_policy):
 
         h_ep_node,h_ep_global = self.ep_encoder(ep_nodes,ep_links)
 
-        h_gp_node,h_gp_global = self.gp_encoder(gp_nodes,gp_links)
         
         if  old_policy:
-            ep_probs,ep_index = self.ep_decoder(h_ep_node,h_ep_global,h_gp_global,mask_ep)
-            
-            return ep_probs,ep_index
+            ep_probs,ep_index = self.ep_decoder(h_ep_node,h_ep_global)
+            dist = Categorical(ep_probs)
+            return dist.log_prob(ep_index),ep_index
         
         else:
-            ep_probs,ep_index = self.ep_decoder(h_ep_node,h_ep_global,h_gp_global,mask_ep)
-
-            val = self.critic(torch.cat([h_ep_node.view(-1,h_ep_node.size(1)*h_ep_node.size(2)),h_gp_node.view(-1,h_gp_node.size(1)*h_gp_node.size(2))],dim=1))
-
-            return ep_probs,ep_index,val
+            ep_probs,ep_index = self.ep_decoder(h_ep_node,h_ep_global)
+            dist = Categorical(ep_probs)
+            return dist.log_prob(ep_index),ep_index
 
 class GPU_ACTOR(nn.Module):
     def __init__(self,expert_feature_dim, 
@@ -304,7 +296,7 @@ class GPU_ACTOR(nn.Module):
         super(GPU_ACTOR,self).__init__()
 
         self.old_policy = old_policy
-
+        # expert and gpu encoder
         self.ep_encoder = Expert_Encoder(expert_feature_dim=expert_feature_dim, hidden_dim=hidden_dim,
                                           output_dim=expert_output_dim, num_layers=num_layers,
                                             num_mlp_layers=num_encoder_layers)
@@ -312,10 +304,11 @@ class GPU_ACTOR(nn.Module):
         self.gp_encoder = GPU_Encoder( gpu_feature_dim=gpu_feature_dim, hidden_dim=hidden_dim,
                                        output_dim=gpu_output_dim, num_layers=num_layers,
                                          num_mlp_layers=num_encoder_layers)
-        
+        # gpu selection decoder
         self.gp_decoder = GPU_Decoder(input_dim=2*gpu_output_dim+expert_output_dim,hidden_dim=hidden_dim,
                                     output_dim=1,num_layers=num_decoder_layers)
         
+        # whether to choose
         self.ac_decoder = MLPCritic(num_layers=1,
                                     input_dim=gpu_output_dim,
                                     hidden_dim=hidden_dim,
@@ -342,9 +335,16 @@ class GPU_ACTOR(nn.Module):
 
         distribution = torch.distributions.Categorical(chosen_prob)
 
-        acts = distribution.sample().squeeze(-1)
         
-        return gp_probs,gp_index,chosen_prob,acts
+        if  old_policy:
+            
+            return  distribution.log_prob(gp_index),gp_index
+        
+        else:
+            
+            val = self.critic(torch.cat([h_ep_node.view(-1,h_ep_node.size(1)*h_ep_node.size(2)),h_gp_node.view(-1,h_gp_node.size(1)*h_gp_node.size(2))],dim=1))
+            
+            return distribution.log_prob(gp_index),gp_index,val
         
 
 class MLPCritic(nn.Module):
